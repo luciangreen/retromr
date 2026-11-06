@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>retromr</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0b10; overflow: hidden; touch-action: none;
+    -webkit-user-select: none; user-select: none; font-family: system-ui, sans-serif; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .hidden { display: none !important; }
+
+  /* the upload screen: one big, obvious picture button */
+  #drop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at center, #1c1a2b 0%, #0b0b10 70%); }
+  #pick { width: min(46vmin, 300px); height: min(46vmin, 300px); border-radius: 50%;
+    border: 3px dashed rgba(255, 214, 140, .55); background: rgba(255, 214, 140, .06);
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    animation: breathe 3.2s ease-in-out infinite; transition: background .2s, border-color .2s; }
+  #pick:hover, #drop.over #pick { background: rgba(255, 214, 140, .14); border-color: #ffd68c; }
+  #pick svg { width: 46%; height: 46%; }
+  @keyframes breathe { 50% { transform: scale(1.045); } }
+  #busy { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+  #busy i { width: 64px; height: 64px; border-radius: 50%; border: 4px solid rgba(255,214,140,.2);
+    border-top-color: #ffd68c; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* the close box - the only text on screen */
+  #close { position: fixed; top: 14px; right: 14px; width: 44px; height: 44px; border-radius: 12px;
+    border: 0; background: rgba(0,0,0,.45); color: #fff; font-size: 30px; line-height: 44px; cursor: pointer;
+    z-index: 10; padding: 0; }
+  #close:hover { background: rgba(200, 40, 40, .8); }
+
+  /* small icon buttons */
+  .icon { position: fixed; width: 44px; height: 44px; border-radius: 12px; border: 0; z-index: 10;
+    background: rgba(0,0,0,.35); cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+  .icon:hover { background: rgba(0,0,0,.6); }
+  .icon svg { width: 24px; height: 24px; }
+  #adjust { top: 14px; left: 14px; opacity: .5; }
+  #adjust:hover { opacity: 1; }
+  #done { bottom: 26px; left: 50%; transform: translateX(-50%); width: 64px; height: 64px; border-radius: 50%; background: #2f8f5b; }
+  #kbd { bottom: 26px; right: 20px; }
+
+  /* listening light */
+  #ring { position: fixed; bottom: 30px; left: 50%; width: 22px; height: 22px; margin-left: -11px;
+    border-radius: 50%; background: #333; box-shadow: 0 0 0 0 rgba(80, 220, 200, 0); transition: background .3s; z-index: 9; }
+  #ring.listening { background: #3fbfae; animation: listen 2.4s ease-in-out infinite; }
+  #ring.hearing { background: #6fffe9; animation: hear .5s ease-in-out infinite; }
+  #ring.thinking { background: #ffb347; animation: listen 1s ease-in-out infinite; }
+  #ring.speaking { background: #555; }
+  #ring.wake { background: #ffd68c; animation: listen 1.6s ease-in-out infinite; width: 56px; height: 56px; margin-left: -28px; bottom: 18px; cursor: pointer; }
+  @keyframes listen { 50% { box-shadow: 0 0 0 10px rgba(80, 220, 200, .18); } }
+  @keyframes hear { 50% { box-shadow: 0 0 0 16px rgba(110, 255, 233, .28); } }
+
+  /* landmark markers for adjusting */
+  .mark { position: fixed; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%;
+    border: 3px solid #ffd68c; background: rgba(255, 214, 140, .18); cursor: grab; z-index: 11; touch-action: none; }
+  .mark.mouth { width: 60px; height: 26px; margin: -13px 0 0 -30px; border-radius: 13px; }
+
+  #typed { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); width: min(70vw, 520px);
+    font: inherit; font-size: 18px; padding: 12px 16px; border-radius: 14px; border: 0; background: rgba(255,255,255,.92); z-index: 10; }
+</style>
+</head>
+<body>
+<canvas id="stage" aria-hidden="true"></canvas>
+
+<div id="drop">
+  <button id="pick" aria-label="Choose your photo">
+    <svg viewBox="0 0 64 64" fill="none" stroke="#ffd68c" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="32" cy="24" r="11"/>
+      <path d="M12 54c3-11 11-17 20-17s17 6 20 17"/>
+      <circle cx="50" cy="14" r="8" fill="#0b0b10"/>
+      <path d="M50 10v8M46 14h8"/>
+    </svg>
+  </button>
+</div>
+<input type="file" id="file" accept="image/*" hidden>
+<div id="busy" class="hidden"><i></i></div>
+
+<button id="close" class="hidden" aria-label="Close">×</button>
+<button id="adjust" class="icon hidden" aria-label="Adjust eyes and mouth">
+  <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><path d="M12 1v5M12 18v5M1 12h5M18 12h5"/></svg>
+</button>
+<button id="done" class="icon hidden" aria-label="Done">
+  <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>
+</button>
+<button id="kbd" class="icon hidden" aria-label="Type instead">
+  <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>
+</button>
+<input id="typed" class="hidden" autocomplete="off" aria-label="Message">
+<div id="ring" class="hidden" role="status" aria-label="Listening"></div>
+<div id="m0" class="mark hidden"></div><div id="m1" class="mark hidden"></div><div id="m2" class="mark mouth hidden"></div>
+
+<script src="newos/tts.js"></script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const canvas = $("stage"), ctx = canvas.getContext("2d");
+const show = (id, on) => $(id).classList.toggle("hidden", !on);
+
+let img = null, IW = 0, IH = 0;          // the photo
+let lm = null, model = null;              // landmarks and animation model (image pixels)
+let jaw = null;                            // pre-cut lower-face sprite
+let skin = ["#c99a7f", "#c99a7f"];         // eyelid colours
+let mode = "upload";                       // upload | talk | adjust
+let open = 0, talkAmp = 0, blinkAt = 0, blinkStart = -1, hearing = false, thinking = false, awake = false;
+let W = 0, H = 0, dpr = 1, fit = { s: 1, ox: 0, oy: 0 };
+
+const api = async (path, body) => {
+  const r = await fetch(path, body === undefined ? { cache: "no-store" } : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+};
+
+/* ---------------- layout ---------------- */
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  if (model) layout();
+}
+window.addEventListener("resize", resize);
+
+function layout() {
+  // put the face in the middle, about half the screen tall
+  const fx = (model.eyes[0][0] + model.eyes[1][0] + model.mouth[0]) / 3;
+  const fy = (model.eyes[0][1] + model.eyes[1][1] + model.mouth[1]) / 3;
+  const faceH = model.eyeDist * 2.6;
+  const cover = Math.max(W / IW, H / IH);
+  let s = (H * 0.55) / faceH;
+  s = Math.max(cover * 0.7, Math.min(s, cover * 3));
+  fit = { s, ox: W / 2 - fx * s, oy: H * 0.46 - fy * s };
+  placeMarks();
+}
+
+/* ---------------- face model (mirror of face_model.pl, used if the server is away) ---------------- */
+function localModel(L) {
+  const [lx, ly] = L.eyeL, [rx, ry] = L.eyeR, [mx, my] = L.mouth;
+  const eyeDist = Math.max(4, Math.hypot(rx - lx, ry - ly));
+  const roll = Math.atan2(ry - ly, rx - lx), dx = -Math.sin(roll), dy = Math.cos(roll);
+  const mw = (L.mouthW > 0.45 * eyeDist && L.mouthW < 1.6 * eyeDist) ? L.mouthW : 0.9 * eyeDist;
+  let chinD = 0.8 * eyeDist;
+  if (L.chin) { const d = (L.chin[0] - mx) * dx + (L.chin[1] - my) * dy; if (d > 0.3 * eyeDist && d < 2 * eyeDist) chinD = d; }
+  const top = -0.08 * mw, bottom = chinD + 0.18 * eyeDist, mid = (top + bottom) / 2;
+  return { roll, eyeDist, eyes: [L.eyeL, L.eyeR], eyeRX: 0.24 * eyeDist, eyeRY: 0.13 * eyeDist, mouth: L.mouth, mouthW: mw,
+    jaw: { cx: mx + dx * mid, cy: my + dy * mid, rx: 0.95 * mw, ry: (bottom - top) / 2 }, maxOpen: 0.3 * mw,
+    down: [dx, dy], pivot: [mx + dx * (chinD + 0.5 * eyeDist), my + dy * (chinD + 0.5 * eyeDist)] };
+}
+
+/* ---------------- finding the face ---------------- */
+const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error("timeout")), ms))]);
+
+async function detectMediaPipe(im) {
+  const v = "0.10.14", base = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${v}`;
+  const vision = await import(`${base}/vision_bundle.mjs`);
+  const files = await vision.FilesetResolver.forVisionTasks(`${base}/wasm`);
+  const fl = await vision.FaceLandmarker.createFromOptions(files, {
+    baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" },
+    runningMode: "IMAGE", numFaces: 1 });
+  const res = fl.detect(im);
+  const p = res && res.faceLandmarks && res.faceLandmarks[0];
+  if (!p) return null;
+  const P = (i) => [p[i].x * IW, p[i].y * IH];
+  let a = mid(P(33), P(133)), b = mid(P(362), P(263));
+  if (a[0] > b[0]) [a, b] = [b, a];
+  return { eyeL: a, eyeR: b, mouth: mid(P(13), P(14)), mouthW: dist(P(61), P(291)), chin: P(152), source: "mediapipe" };
+}
+
+async function detectFaceAPI(im) {
+  if (!("FaceDetector" in window)) return null;
+  const faces = await new window.FaceDetector({ fastMode: false, maxDetectedFaces: 1 }).detect(im);
+  if (!faces.length) return null;
+  const f = faces[0], bb = f.boundingBox, marks = f.landmarks || [];
+  const pts = (t) => marks.filter((m) => m.type === t).flatMap((m) => m.locations.map((q) => [q.x, q.y]));
+  const eyes = pts("eye").sort((u, v) => u[0] - v[0]);
+  const mouthPts = pts("mouth");
+  const eyeL = eyes.length >= 2 ? eyes[0] : [bb.x + bb.width * 0.32, bb.y + bb.height * 0.4];
+  const eyeR = eyes.length >= 2 ? eyes[eyes.length - 1] : [bb.x + bb.width * 0.68, bb.y + bb.height * 0.4];
+  const mouth = mouthPts.length ? mouthPts.reduce((s, q) => [s[0] + q[0] / mouthPts.length, s[1] + q[1] / mouthPts.length], [0, 0]) : [bb.x + bb.width / 2, bb.y + bb.height * 0.76];
+  return { eyeL, eyeR, mouth, mouthW: bb.width * 0.38, chin: [bb.x + bb.width / 2, bb.y + bb.height], source: "facedetector" };
+}
+
+// Last resort: find the largest patch of skin tones and assume a face in it.
+function detectSkin(im) {
+  const w = 160, h = Math.max(1, Math.round(IH * (160 / IW)));
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  const g = c.getContext("2d"); g.drawImage(im, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data;
+  const cols = new Array(w).fill(0), rows = new Array(h).fill(0);
+  let n = 0;
+  for (let y = 0; y < h * 0.85; y++) for (let x = Math.floor(w * 0.1); x < w * 0.9; x++) {
+    const i = (y * w + x) * 4, R = d[i], G = d[i + 1], B = d[i + 2];
+    const cb = 128 - 0.168736 * R - 0.331264 * G + 0.5 * B, cr = 128 + 0.5 * R - 0.418688 * G - 0.081312 * B;
+    if (cb > 77 && cb < 127 && cr > 133 && cr < 173 && R > 60) { cols[x]++; rows[y]++; n++; }
+  }
+  if (n < w * h * 0.03) return defaultLandmarks();
+  const cmax = Math.max(...cols), rmax = Math.max(...rows);
+  const xs = cols.map((v, i) => v > cmax * 0.35 ? i : -1).filter((i) => i >= 0);
+  const ys = rows.map((v, i) => v > rmax * 0.25 ? i : -1).filter((i) => i >= 0);
+  if (!xs.length || !ys.length) return defaultLandmarks();
+  const k = IW / w;
+  const x0 = xs[0] * k, x1 = xs[xs.length - 1] * k, fw = Math.max(20, x1 - x0);
+  const y0 = ys[0] * k, fh = Math.min(fw * 1.3, IH - y0);
+  const cx = (x0 + x1) / 2;
+  return { eyeL: [cx - fw * 0.2, y0 + fh * 0.42], eyeR: [cx + fw * 0.2, y0 + fh * 0.42],
+           mouth: [cx, y0 + fh * 0.78], mouthW: fw * 0.36, chin: [cx, y0 + fh * 0.98], source: "skin" };
+}
+
+function defaultLandmarks() {
+  const s = Math.min(IW, IH * 0.8), mx = IW / 2, ey = IH * 0.42;
+  return { eyeL: [mx - 0.17 * s, ey], eyeR: [mx + 0.17 * s, ey], mouth: [mx, ey + 0.36 * s], mouthW: 0.3 * s, source: "guess" };
+}
+
+async function findFace(im) {
+  for (const f of [() => withTimeout(detectMediaPipe(im), 12000), () => withTimeout(detectFaceAPI(im), 4000)]) {
+    try { const r = await f(); if (r) return r; } catch (e) { /* try the next way */ }
+  }
+  return detectSkin(im);
+}
+
+/* ---------------- preparing the photo ---------------- */
+function loadImage(src) {
+  return new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = src; });
+}
+
+async function shrink(file) {
+  const url = URL.createObjectURL(file);
+  const raw = await loadImage(url);
+  const k = Math.min(1, 1100 / Math.max(raw.naturalWidth, raw.naturalHeight));
+  const c = document.createElement("canvas");
+  c.width = Math.round(raw.naturalWidth * k); c.height = Math.round(raw.naturalHeight * k);
+  c.getContext("2d").drawImage(raw, 0, 0, c.width, c.height);
+  URL.revokeObjectURL(url);
+  return c.toDataURL("image/jpeg", 0.9);
+}
+
+function sampleColour(x, y, r) {
+  const c = document.createElement("canvas"); c.width = c.height = 1;
+  const g = c.getContext("2d");
+  g.drawImage(img, x - r, y - r, 2 * r, 2 * r, 0, 0, 1, 1);
+  const [R, G, B] = g.getImageData(0, 0, 1, 1).data;
+  return `rgb(${R},${G},${B})`;
+}
+
+// Cut out the lower lip and chin as a soft-edged sprite that can drop like a jaw.
+function buildJaw() {
+  const j = model.jaw, roll = model.roll, ml = model.mouth, dn = model.down;
+  const ext = Math.max(j.rx, j.ry) * 1.05;
+  const x0 = Math.floor(j.cx - ext), y0 = Math.floor(j.cy - ext), size = Math.ceil(ext * 2);
+  const c = document.createElement("canvas"); c.width = size; c.height = size;
+  const g = c.getContext("2d");
+  g.drawImage(img, -x0, -y0);
+  // soft elliptical edge
+  g.globalCompositeOperation = "destination-in";
+  g.save();
+  g.translate(j.cx - x0, j.cy - y0); g.rotate(roll); g.scale(j.rx, j.ry);
+  const rg = g.createRadialGradient(0, 0, 0, 0, 0, 1);
+  rg.addColorStop(0, "rgba(0,0,0,1)"); rg.addColorStop(0.62, "rgba(0,0,0,1)"); rg.addColorStop(1, "rgba(0,0,0,0)");
+  g.fillStyle = rg; g.beginPath(); g.arc(0, 0, 1, 0, Math.PI * 2); g.fill();
+  g.restore();
+  // a crisp cut along the lip line, so only the lower lip and chin move
+  g.save();
+  const lx = ml[0] - x0, ly = ml[1] - y0;
+  const lg = g.createLinearGradient(lx, ly, lx + dn[0] * 3, ly + dn[1] * 3);
+  lg.addColorStop(0, "rgba(0,0,0,0)"); lg.addColorStop(1, "rgba(0,0,0,1)");
+  g.fillStyle = lg; g.fillRect(0, 0, size, size);
+  g.restore();
+  jaw = { canvas: c, x0, y0 };
+}
+
+async function setFace(landmarks, serverModel) {
+  lm = landmarks;
+  model = serverModel || localModel(landmarks);
+  buildJaw();
+  const ry = model.eyeRY;
+  skin = model.eyes.map((e) => sampleColour(e[0] + model.down[0] * ry * 2.6, e[1] + model.down[1] * ry * 2.6, Math.max(2, ry * 0.6)));
+  layout();
+}
+
+/* ---------------- drawing ---------------- */
+function frame(now) {
+  requestAnimationFrame(frame);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#0b0b10"; ctx.fillRect(0, 0, W, H);
+  if (!img || !model || mode === "upload") return;
+  const t = now / 1000;
+  talkAmp += ((NewosVoice.speaking ? 1 : 0) - talkAmp) * 0.05;
+  const still = mode === "adjust";
+  const sway = still ? 0 : 0.012 * Math.sin(t * 0.6) + 0.007 * Math.sin(t * 1.37) + talkAmp * 0.012 * Math.sin(t * 6.3)
+             + (hearing ? 0.03 : 0) ;
+  const bob = still ? 0 : 1.5 * Math.sin(t * 0.9) + talkAmp * open * model.maxOpen * 0.12;
+  const breathe = still ? 1 : 1 + 0.004 * Math.sin(t * 1.7);
+  const [px, py] = model.pivot;
+  // screen <- image transform with the head motion around the neck pivot
+  ctx.translate(fit.ox + px * fit.s, fit.oy + py * fit.s + bob);
+  ctx.rotate(sway);
+  ctx.scale(fit.s * breathe, fit.s * breathe);
+  ctx.translate(-px, -py);
+
+  ctx.drawImage(img, 0, 0);
+
+  // mouth
+  const d = Math.max(0, Math.min(1, open)) * model.maxOpen;
+  if (d > 0.4) {
+    const [mx, my] = model.mouth, [dx, dy] = model.down, rx = model.mouthW * 0.43;
+    ctx.save();
+    ctx.translate(mx + dx * d * 0.5, my + dy * d * 0.5);
+    ctx.rotate(model.roll);
+    const ry = d * 0.56 + 0.5;
+    const cg = ctx.createRadialGradient(0, 0, 0, 0, 0, Math.max(rx, ry));
+    cg.addColorStop(0, "#12040a"); cg.addColorStop(1, "#3a1416");
+    ctx.fillStyle = cg;
+    ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
+    if (d > 2) {
+      ctx.fillStyle = "rgba(236,230,220,.82)";
+      ctx.beginPath(); ctx.ellipse(0, -ry + Math.min(d * 0.14, model.mouthW * 0.05), rx * 0.72, Math.min(d * 0.16, model.mouthW * 0.06), 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(160,60,70,.75)";
+      ctx.beginPath(); ctx.ellipse(0, ry * 0.55, rx * 0.5, ry * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+    ctx.drawImage(jaw.canvas, jaw.x0 + dx * d, jaw.y0 + dy * d);
+  }
+
+  // blinking
+  if (now > blinkAt) { blinkStart = now; blinkAt = now + 2200 + Math.random() * 4200; }
+  const bt = (now - blinkStart) / 150;
+  const b = bt >= 0 && bt <= 2 ? (bt < 1 ? bt : 2 - bt) : 0;
+  if (b > 0.02) model.eyes.forEach((e, i) => eyelid(e, b, skin[i]));
+}
+
+function eyelid([ex, ey], b, colour) {
+  const rx = model.eyeRX, ry = model.eyeRY;
+  ctx.save();
+  ctx.translate(ex, ey); ctx.rotate(model.roll);
+  ctx.beginPath(); ctx.ellipse(0, 0, rx * 1.12, ry * 1.35, 0, 0, Math.PI * 2); ctx.clip();
+  ctx.shadowColor = colour; ctx.shadowBlur = ry * 0.8;
+  ctx.fillStyle = colour;
+  const h = ry * 2.7 * b;
+  ctx.fillRect(-rx * 1.3, -ry * 1.35, rx * 2.6, h);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(40,25,20,.55)"; ctx.lineWidth = Math.max(1, ry * 0.18);
+  ctx.beginPath(); ctx.ellipse(0, -ry * 1.35 + h - ry * 0.1, rx * 0.95, ry * 0.25, 0, 0.15, Math.PI - 0.15); ctx.stroke();
+  ctx.restore();
+}
+
+/* ---------------- talking ---------------- */
+function setRing(state) {
+  $("ring").className = state;
+  show("ring", mode === "talk");
+}
+
+function listen() {
+  if (!NewosListen.supported) { show("kbd", true); setRing(""); return; }
+  NewosListen.start({
+    onFinal: (text) => { hearing = false; say(text); },
+    onInterim: (t) => { hearing = !!t && !NewosVoice.speaking; if (!thinking && !NewosVoice.speaking) setRing(hearing ? "hearing" : "listening"); },
+    onState: (s) => { if (s === "denied") { show("kbd", true); setRing(""); } else if (s === "listening" && !thinking && !NewosVoice.speaking) setRing("listening"); },
+  });
+}
+
+async function say(text) {
+  if (!text || mode !== "talk") return;
+  thinking = true; setRing("thinking");
+  let speak;
+  try { speak = (await api("api/chat", { text })).speak; }
+  catch (e) { speak = "I can't reach my server right now."; }
+  thinking = false;
+  await talk(speak);
+}
+
+async function talk(text) {
+  if (mode !== "talk") return;
+  setRing("speaking");
+  let blocked = false;
+  await NewosVoice.speak(text, { onMouth: (v) => { open = v; }, onBlocked: () => { blocked = true; } });
+  if (blocked) { awake = false; NewosListen.stop(); open = 0; setRing("wake"); return; }
+  open = 0;
+  setRing(NewosListen.supported && NewosListen.listening ? "listening" : "");
+}
+
+function unlockSpeech() {
+  try { if (window.speechSynthesis) speechSynthesis.speak(new SpeechSynthesisUtterance("")); } catch (e) { /* ignore */ }
+}
+
+function wake() {
+  if (awake) return;
+  awake = true;
+  unlockSpeech();
+  listen();
+  say("hello");
+}
+
+/* ---------------- modes ---------------- */
+function enterTalk() {
+  mode = "talk";
+  show("drop", false); show("busy", false); show("close", true); show("adjust", true); show("done", false);
+  ["m0", "m1", "m2"].forEach((m) => show(m, false));
+  show("ring", true);
+  if (awake) setRing(NewosListen.listening ? "listening" : "");
+  else setRing("wake");
+}
+
+function enterUpload() {
+  mode = "upload";
+  NewosListen.stop(); NewosVoice.cancel(); awake = false; open = 0;
+  img = null; model = null; lm = null;
+  ["close", "adjust", "done", "ring", "kbd", "typed", "busy", "m0", "m1", "m2"].forEach((id) => show(id, false));
+  show("drop", true);
+}
+
+$("close").onclick = async () => {
+  enterUpload();
+  try { await api("api/face/clear", {}); } catch (e) { /* offline */ }
+};
+
+$("ring").onclick = () => { if (!awake) wake(); };
+canvas.addEventListener("pointerdown", () => { if (mode === "talk" && !awake) wake(); });
+
+/* upload */
+$("pick").onclick = () => { unlockSpeech(); $("file").click(); };
+$("file").onchange = (e) => { const f = e.target.files[0]; if (f) useFile(f); e.target.value = ""; };
+["dragenter", "dragover"].forEach((ev) => $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.remove("over"); }));
+$("drop").addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f && f.type.startsWith("image/")) { unlockSpeech(); useFile(f); } });
+
+async function useFile(file) {
+  show("drop", false); show("busy", true);
+  const dataUrl = await shrink(file);
+  img = await loadImage(dataUrl); IW = img.naturalWidth; IH = img.naturalHeight;
+  const L = await findFace(img);
+  let m = null;
+  try { m = (await api("api/face", { image: dataUrl, landmarks: L, width: IW, height: IH })).model; } catch (e) { /* offline */ }
+  await setFace(L, m);
+  enterTalk();
+  wake();
+  if (L.source === "skin" || L.source === "guess") setTimeout(() => startAdjust(true), 600);
+}
+
+/* adjusting the eyes and mouth by dragging */
+const marks = ["m0", "m1", "m2"];
+const keys = ["eyeL", "eyeR", "mouth"];
+function toScreen([x, y]) { return [fit.ox + x * fit.s, fit.oy + y * fit.s]; }
+function toImage([x, y]) { return [(x - fit.ox) / fit.s, (y - fit.oy) / fit.s]; }
+function placeMarks() {
+  if (!lm) return;
+  marks.forEach((id, i) => { const [x, y] = toScreen(lm[keys[i]]); $(id).style.left = x + "px"; $(id).style.top = y + "px"; });
+}
+function startAdjust() {
+  if (!model) return;
+  mode = "adjust";
+  marks.forEach((m) => show(m, true)); show("done", true); show("adjust", false); show("ring", false);
+  placeMarks();
+}
+marks.forEach((id, i) => {
+  const el = $(id);
+  el.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); el.setPointerCapture(e.pointerId);
+    const move = (ev) => { el.style.left = ev.clientX + "px"; el.style.top = ev.clientY + "px"; lm[keys[i]] = toImage([ev.clientX, ev.clientY]); };
+    const up = () => { el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); };
+    el.addEventListener("pointermove", move); el.addEventListener("pointerup", up);
+  });
+});
+$("adjust").onclick = () => startAdjust();
+$("done").onclick = async () => {
+  if (lm.eyeL[0] > lm.eyeR[0]) [lm.eyeL, lm.eyeR] = [lm.eyeR, lm.eyeL];
+  delete lm.chin;
+  lm.mouthW = 0.9 * dist(lm.eyeL, lm.eyeR);
+  let m = null;
+  try { m = (await api("api/face", { image: img.src, landmarks: lm, width: IW, height: IH })).model; } catch (e) { /* offline */ }
+  await setFace(lm, m);
+  enterTalk();
+};
+
+/* typing, only where the browser can't listen */
+$("kbd").onclick = () => { show("typed", true); $("typed").focus(); };
+$("typed").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { const t = e.target.value.trim(); e.target.value = ""; show("typed", false); if (!awake) { awake = true; unlockSpeech(); } say(t); }
+  if (e.key === "Escape") show("typed", false);
+});
+
+/* ---------------- start ---------------- */
+(async function boot() {
+  resize();
+  requestAnimationFrame(frame);
+  try {
+    const f = await api("api/face");
+    if (f.image) {
+      img = await loadImage(f.image); IW = img.naturalWidth; IH = img.naturalHeight;
+      await setFace(f.landmarks, f.model);
+      enterTalk();               // waits for a tap (browsers need one before speaking)
+      return;
+    }
+  } catch (e) { /* no server or no saved face */ }
+  enterUpload();
+})();
+</script>
+</body>
+</html>
