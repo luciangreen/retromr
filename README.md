@@ -18,6 +18,10 @@ Then open <http://localhost:8082> in Chrome, Edge or Safari, which have built-in
 * If `../newos` exists, retromr loads the newos engine directly and shares its memory (`newos/data/knowledge.pl`). Set `NEWOS_DIR` to use a copy somewhere else.
 * Otherwise retromr talks to a running newos server at `NEWOS_URL` (default `http://localhost:8081/api/chat`).
 
+## Without installing anything
+
+`docs/index.html` is a self-contained version that runs in any browser, with no Prolog or server. You type instead of talking, and a small JavaScript copy of newos answers. Memory is kept in your browser. With GitHub Pages turned on (Settings → Pages → Deploy from branch → `main`, folder `/docs`), it runs at <https://luciangreen.github.io/retromr/>.
+
 ## Using it
 
 1. Tap the glowing circle and choose a photo, or drop one onto the page.

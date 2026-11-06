@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>retromr for Claude</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0b10; overflow: hidden; touch-action: none;
+    -webkit-user-select: none; user-select: none; font-family: system-ui, sans-serif; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .hidden { display: none !important; }
+  #drop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at center, #1c1a2b 0%, #0b0b10 70%); }
+  #pick { width: min(46vmin, 300px); height: min(46vmin, 300px); border-radius: 50%;
+    border: 3px dashed rgba(255, 214, 140, .55); background: rgba(255, 214, 140, .06);
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    animation: breathe 3.2s ease-in-out infinite; transition: background .2s, border-color .2s; }
+  #pick:hover, #drop.over #pick { background: rgba(255, 214, 140, .14); border-color: #ffd68c; }
+  #pick svg { width: 46%; height: 46%; }
+  @keyframes breathe { 50% { transform: scale(1.045); } }
+  #close { position: fixed; top: 14px; right: 14px; width: 44px; height: 44px; border-radius: 12px;
+    border: 0; background: rgba(0,0,0,.45); color: #fff; font-size: 30px; line-height: 44px; cursor: pointer; z-index: 10; padding: 0; }
+  #close:hover { background: rgba(200, 40, 40, .8); }
+  .icon { position: fixed; width: 44px; height: 44px; border-radius: 12px; border: 0; z-index: 10;
+    background: rgba(0,0,0,.35); cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+  .icon:hover { background: rgba(0,0,0,.6); }
+  .icon svg { width: 24px; height: 24px; }
+  #adjust { top: 14px; left: 14px; opacity: .5; }
+  #adjust:hover { opacity: 1; }
+  #done { bottom: 26px; left: 50%; transform: translateX(-50%); width: 64px; height: 64px; border-radius: 50%; background: #2f8f5b; }
+  .mark { position: fixed; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%;
+    border: 3px solid #ffd68c; background: rgba(255, 214, 140, .18); cursor: grab; z-index: 11; touch-action: none; }
+  .mark.mouth { width: 60px; height: 26px; margin: -13px 0 0 -30px; border-radius: 13px; }
+  #bar { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); width: min(80vw, 560px);
+    display: flex; gap: 8px; z-index: 10; }
+  #typed { flex: 1; font: inherit; font-size: 18px; padding: 13px 18px; border-radius: 999px; border: 0;
+    background: rgba(255,255,255,.14); color: #fff; outline: none; backdrop-filter: blur(6px);
+    -webkit-user-select: text; user-select: text; }
+  #typed:focus { background: rgba(255,255,255,.22); }
+  #typed.thinking { background: rgba(255,179,71,.25); }
+  #send { position: static; width: 48px; height: 48px; border-radius: 50%; background: rgba(255, 214, 140, .25); }
+  #caption { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); max-width: min(86vw, 640px);
+    background: rgba(0,0,0,.6); color: #fff; padding: 10px 16px; border-radius: 14px; font-size: 17px; z-index: 9; text-align: center; }
+</style>
+</head>
+<body>
+<canvas id="stage" aria-hidden="true"></canvas>
+
+<div id="drop">
+  <button id="pick" aria-label="Choose your photo">
+    <svg viewBox="0 0 64 64" fill="none" stroke="#ffd68c" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="32" cy="24" r="11"/><path d="M12 54c3-11 11-17 20-17s17 6 20 17"/>
+      <circle cx="50" cy="14" r="8" fill="#0b0b10"/><path d="M50 10v8M46 14h8"/>
+    </svg>
+  </button>
+</div>
+<input type="file" id="file" accept="image/*" hidden>
+
+<button id="close" class="hidden" aria-label="Close">×</button>
+<button id="adjust" class="icon hidden" aria-label="Adjust eyes and mouth">
+  <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><path d="M12 1v5M12 18v5M1 12h5M18 12h5"/></svg>
+</button>
+<button id="done" class="icon hidden" aria-label="Done">
+  <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>
+</button>
+<form id="bar" class="hidden" autocomplete="off">
+  <input id="typed" aria-label="Talk to me">
+  <button id="send" class="icon" aria-label="Send">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#ffd68c" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
+  </button>
+</form>
+<div id="caption" class="hidden" aria-live="polite"></div>
+<div id="m0" class="mark hidden"></div><div id="m1" class="mark hidden"></div><div id="m2" class="mark mouth hidden"></div>
+
+<script>
+"use strict";
+/* retromr for Claude: the talking photo, running entirely in this page.
+   Differences from the full retromr: you type instead of speaking (Claude pages
+   can't use the microphone), the brain is a small JavaScript newos, and memory
+   lives in this browser. */
+const $ = (id) => document.getElementById(id);
+const canvas = $("stage"), ctx = canvas.getContext("2d");
+const show = (id, on) => $(id).classList.toggle("hidden", !on);
+
+let img = null, IW = 0, IH = 0, lm = null, model = null, jaw = null;
+let skin = ["#c99a7f", "#c99a7f"], mode = "upload";
+let open = 0, talkAmp = 0, blinkAt = 0, blinkStart = -1, hearing = false;
+let W = 0, H = 0, dpr = 1, fit = { s: 1, ox: 0, oy: 0 };
+
+/* ---------------- speech with lip-sync (from newos web/tts.js) ---------------- */
+const NewosVoice = (() => {
+  const synth = window.speechSynthesis || null, CPS = 14.5;
+  let speaking = false, raf = 0, current = null;
+  const shape = (ch) => {
+    if (!ch) return 0.05; const c = ch.toLowerCase();
+    if ("ao".includes(c)) return 1; if ("eiuy".includes(c)) return 0.72; if ("mbp".includes(c)) return 0;
+    if ("fv".includes(c)) return 0.18; if ("wq".includes(c)) return 0.45; if (/[a-z0-9]/.test(c)) return 0.38; return 0.04;
+  };
+  function animate(text, rateOf, onMouth, isLive) {
+    let anchor = 0, t0 = performance.now(), sm = 0;
+    const f = (now) => {
+      if (!isLive()) return;
+      const pos = Math.min(text.length - 1, Math.floor(anchor + ((now - t0) / 1000) * CPS * rateOf()));
+      const target = shape(text[pos]), fl = target > 0.3 ? 0.12 * Math.sin(now / 55) : 0;
+      sm += (target + fl - sm) * 0.35; onMouth(Math.max(0, Math.min(1, sm)));
+      raf = requestAnimationFrame(f);
+    };
+    raf = requestAnimationFrame(f);
+    return (ci) => { anchor = ci; t0 = performance.now(); };
+  }
+  return {
+    get speaking() { return speaking; },
+    cancel() { if (synth) try { synth.cancel(); } catch (e) {} cancelAnimationFrame(raf); speaking = false; },
+    speak(text, opts = {}) {
+      const clean = String(text || "").replace(/[•\[\]{}<>#*_]/g, " ").replace(/\s+/g, " ").trim();
+      if (!clean) return Promise.resolve();
+      this.cancel();
+      const onMouth = opts.onMouth || (() => {});
+      return new Promise((resolve) => {
+        let finished = false;
+        const done = (ok) => { if (finished) return; finished = true; speaking = false; cancelAnimationFrame(raf); onMouth(0); resolve(ok); };
+        speaking = true;
+        if (!synth || !window.SpeechSynthesisUtterance) {   // no voice: still move the mouth
+          animate(clean, () => 1, onMouth, () => speaking && !finished);
+          setTimeout(() => done(false), (clean.length / CPS) * 1000 + 300);
+          return;
+        }
+        const u = new SpeechSynthesisUtterance(clean);
+        const vs = synth.getVoices(), lang = (navigator.language || "en").slice(0, 2);
+        const v = vs.find((x) => x.lang && x.lang.startsWith(lang) && /natural|neural|google|samantha|daniel|karen/i.test(x.name)) || vs.find((x) => x.lang && x.lang.startsWith(lang));
+        if (v) u.voice = v;
+        current = u;
+        let jump = null;
+        u.onstart = () => { if (!jump) jump = animate(clean, () => u.rate || 1, onMouth, () => speaking && !finished); };
+        u.onboundary = (e) => { if (jump && typeof e.charIndex === "number") jump(e.charIndex); };
+        u.onend = () => current === u && done(true);
+        u.onerror = (e) => current === u && done(!(e && (e.error === "not-allowed" || e.error === "synthesis-failed")));
+        try { synth.speak(u); } catch (e) { done(false); return; }
+        setTimeout(() => { if (!jump && !finished && current === u) u.onstart(); }, 450);
+        setTimeout(() => done(true), 2500 + (clean.length / CPS) * 1800);
+      });
+    },
+  };
+})();
+
+/* ---------------- layout ---------------- */
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  if (model) layout();
+}
+window.addEventListener("resize", resize);
+
+function layout() {
+  // put the face in the middle, about half the screen tall
+  const fx = (model.eyes[0][0] + model.eyes[1][0] + model.mouth[0]) / 3;
+  const fy = (model.eyes[0][1] + model.eyes[1][1] + model.mouth[1]) / 3;
+  const faceH = model.eyeDist * 2.6;
+  const cover = Math.max(W / IW, H / IH);
+  let s = (H * 0.55) / faceH;
+  s = Math.max(cover * 0.7, Math.min(s, cover * 3));
+  fit = { s, ox: W / 2 - fx * s, oy: H * 0.46 - fy * s };
+  placeMarks();
+}
+
+/* ---------------- face model (mirror of face_model.pl, used if the server is away) ---------------- */
+function localModel(L) {
+  const [lx, ly] = L.eyeL, [rx, ry] = L.eyeR, [mx, my] = L.mouth;
+  const eyeDist = Math.max(4, Math.hypot(rx - lx, ry - ly));
+  const roll = Math.atan2(ry - ly, rx - lx), dx = -Math.sin(roll), dy = Math.cos(roll);
+  const mw = (L.mouthW > 0.45 * eyeDist && L.mouthW < 1.6 * eyeDist) ? L.mouthW : 0.9 * eyeDist;
+  let chinD = 0.8 * eyeDist;
+  if (L.chin) { const d = (L.chin[0] - mx) * dx + (L.chin[1] - my) * dy; if (d > 0.3 * eyeDist && d < 2 * eyeDist) chinD = d; }
+  const top = -0.08 * mw, bottom = chinD + 0.18 * eyeDist, mid = (top + bottom) / 2;
+  return { roll, eyeDist, eyes: [L.eyeL, L.eyeR], eyeRX: 0.24 * eyeDist, eyeRY: 0.13 * eyeDist, mouth: L.mouth, mouthW: mw,
+    jaw: { cx: mx + dx * mid, cy: my + dy * mid, rx: 0.95 * mw, ry: (bottom - top) / 2 }, maxOpen: 0.3 * mw,
+    down: [dx, dy], pivot: [mx + dx * (chinD + 0.5 * eyeDist), my + dy * (chinD + 0.5 * eyeDist)] };
+}
+
+/* ---------------- finding the face ---------------- */
+const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error("timeout")), ms))]);
+
+async function detectFaceAPI(im) {
+  if (!("FaceDetector" in window)) return null;
+  const faces = await new window.FaceDetector({ fastMode: false, maxDetectedFaces: 1 }).detect(im);
+  if (!faces.length) return null;
+  const f = faces[0], bb = f.boundingBox, marks = f.landmarks || [];
+  const pts = (t) => marks.filter((m) => m.type === t).flatMap((m) => m.locations.map((q) => [q.x, q.y]));
+  const eyes = pts("eye").sort((u, v) => u[0] - v[0]);
+  const mouthPts = pts("mouth");
+  const eyeL = eyes.length >= 2 ? eyes[0] : [bb.x + bb.width * 0.32, bb.y + bb.height * 0.4];
+  const eyeR = eyes.length >= 2 ? eyes[eyes.length - 1] : [bb.x + bb.width * 0.68, bb.y + bb.height * 0.4];
+  const mouth = mouthPts.length ? mouthPts.reduce((s, q) => [s[0] + q[0] / mouthPts.length, s[1] + q[1] / mouthPts.length], [0, 0]) : [bb.x + bb.width / 2, bb.y + bb.height * 0.76];
+  return { eyeL, eyeR, mouth, mouthW: bb.width * 0.38, chin: [bb.x + bb.width / 2, bb.y + bb.height], source: "facedetector" };
+}
+
+// Last resort: find the largest patch of skin tones and assume a face in it.
+function detectSkin(im) {
+  const w = 160, h = Math.max(1, Math.round(IH * (160 / IW)));
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  const g = c.getContext("2d"); g.drawImage(im, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data;
+  const cols = new Array(w).fill(0), rows = new Array(h).fill(0);
+  let n = 0;
+  for (let y = 0; y < h * 0.85; y++) for (let x = Math.floor(w * 0.1); x < w * 0.9; x++) {
+    const i = (y * w + x) * 4, R = d[i], G = d[i + 1], B = d[i + 2];
+    const cb = 128 - 0.168736 * R - 0.331264 * G + 0.5 * B, cr = 128 + 0.5 * R - 0.418688 * G - 0.081312 * B;
+    if (cb > 77 && cb < 127 && cr > 133 && cr < 173 && R > 60) { cols[x]++; rows[y]++; n++; }
+  }
+  if (n < w * h * 0.03) return defaultLandmarks();
+  const cmax = Math.max(...cols), rmax = Math.max(...rows);
+  const xs = cols.map((v, i) => v > cmax * 0.35 ? i : -1).filter((i) => i >= 0);
+  const ys = rows.map((v, i) => v > rmax * 0.25 ? i : -1).filter((i) => i >= 0);
+  if (!xs.length || !ys.length) return defaultLandmarks();
+  const k = IW / w;
+  const x0 = xs[0] * k, x1 = xs[xs.length - 1] * k, fw = Math.max(20, x1 - x0);
+  const y0 = ys[0] * k, fh = Math.min(fw * 1.3, IH - y0);
+  const cx = (x0 + x1) / 2;
+  return { eyeL: [cx - fw * 0.2, y0 + fh * 0.42], eyeR: [cx + fw * 0.2, y0 + fh * 0.42],
+           mouth: [cx, y0 + fh * 0.78], mouthW: fw * 0.36, chin: [cx, y0 + fh * 0.98], source: "skin" };
+}
+
+function defaultLandmarks() {
+  const s = Math.min(IW, IH * 0.8), mx = IW / 2, ey = IH * 0.42;
+  return { eyeL: [mx - 0.17 * s, ey], eyeR: [mx + 0.17 * s, ey], mouth: [mx, ey + 0.36 * s], mouthW: 0.3 * s, source: "guess" };
+}
+
+async function findFace(im) {
+  for (const f of [() => withTimeout(detectFaceAPI(im), 4000)]) {
+    try { const r = await f(); if (r) return r; } catch (e) { /* try the next way */ }
+  }
+  return detectSkin(im);
+}
+
+/* ---------------- preparing the photo ---------------- */
+function loadImage(src) {
+  return new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = src; });
+}
+
+async function shrink(file) {
+  const url = URL.createObjectURL(file);
+  const raw = await loadImage(url);
+  const k = Math.min(1, 1100 / Math.max(raw.naturalWidth, raw.naturalHeight));
+  const c = document.createElement("canvas");
+  c.width = Math.round(raw.naturalWidth * k); c.height = Math.round(raw.naturalHeight * k);
+  c.getContext("2d").drawImage(raw, 0, 0, c.width, c.height);
+  URL.revokeObjectURL(url);
+  return c.toDataURL("image/jpeg", 0.9);
+}
+
+function sampleColour(x, y, r) {
+  const c = document.createElement("canvas"); c.width = c.height = 1;
+  const g = c.getContext("2d");
+  g.drawImage(img, x - r, y - r, 2 * r, 2 * r, 0, 0, 1, 1);
+  const [R, G, B] = g.getImageData(0, 0, 1, 1).data;
+  return `rgb(${R},${G},${B})`;
+}
+
+// Cut out the lower lip and chin as a soft-edged sprite that can drop like a jaw.
+function buildJaw() {
+  const j = model.jaw, roll = model.roll, ml = model.mouth, dn = model.down;
+  const ext = Math.max(j.rx, j.ry) * 1.05;
+  const x0 = Math.floor(j.cx - ext), y0 = Math.floor(j.cy - ext), size = Math.ceil(ext * 2);
+  const c = document.createElement("canvas"); c.width = size; c.height = size;
+  const g = c.getContext("2d");
+  g.drawImage(img, -x0, -y0);
+  // soft elliptical edge
+  g.globalCompositeOperation = "destination-in";
+  g.save();
+  g.translate(j.cx - x0, j.cy - y0); g.rotate(roll); g.scale(j.rx, j.ry);
+  const rg = g.createRadialGradient(0, 0, 0, 0, 0, 1);
+  rg.addColorStop(0, "rgba(0,0,0,1)"); rg.addColorStop(0.62, "rgba(0,0,0,1)"); rg.addColorStop(1, "rgba(0,0,0,0)");
+  g.fillStyle = rg; g.beginPath(); g.arc(0, 0, 1, 0, Math.PI * 2); g.fill();
+  g.restore();
+  // a crisp cut along the lip line, so only the lower lip and chin move
+  g.save();
+  const lx = ml[0] - x0, ly = ml[1] - y0;
+  const lg = g.createLinearGradient(lx, ly, lx + dn[0] * 3, ly + dn[1] * 3);
+  lg.addColorStop(0, "rgba(0,0,0,0)"); lg.addColorStop(1, "rgba(0,0,0,1)");
+  g.fillStyle = lg; g.fillRect(0, 0, size, size);
+  g.restore();
+  jaw = { canvas: c, x0, y0 };
+}
+
+async function setFace(landmarks, serverModel) {
+  lm = landmarks;
+  model = serverModel || localModel(landmarks);
+  buildJaw();
+  const ry = model.eyeRY;
+  skin = model.eyes.map((e) => sampleColour(e[0] + model.down[0] * ry * 2.6, e[1] + model.down[1] * ry * 2.6, Math.max(2, ry * 0.6)));
+  layout();
+}
+
+/* ---------------- drawing ---------------- */
+function frame(now) {
+  requestAnimationFrame(frame);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#0b0b10"; ctx.fillRect(0, 0, W, H);
+  if (!img || !model || mode === "upload") return;
+  const t = now / 1000;
+  talkAmp += ((NewosVoice.speaking ? 1 : 0) - talkAmp) * 0.05;
+  const still = mode === "adjust";
+  const sway = still ? 0 : 0.012 * Math.sin(t * 0.6) + 0.007 * Math.sin(t * 1.37) + talkAmp * 0.012 * Math.sin(t * 6.3)
+             + (hearing ? 0.03 : 0) ;
+  const bob = still ? 0 : 1.5 * Math.sin(t * 0.9) + talkAmp * open * model.maxOpen * 0.12;
+  const breathe = still ? 1 : 1 + 0.004 * Math.sin(t * 1.7);
+  const [px, py] = model.pivot;
+  // screen <- image transform with the head motion around the neck pivot
+  ctx.translate(fit.ox + px * fit.s, fit.oy + py * fit.s + bob);
+  ctx.rotate(sway);
+  ctx.scale(fit.s * breathe, fit.s * breathe);
+  ctx.translate(-px, -py);
+
+  ctx.drawImage(img, 0, 0);
+
+  // mouth
+  const d = Math.max(0, Math.min(1, open)) * model.maxOpen;
+  if (d > 0.4) {
+    const [mx, my] = model.mouth, [dx, dy] = model.down, rx = model.mouthW * 0.43;
+    ctx.save();
+    ctx.translate(mx + dx * d * 0.5, my + dy * d * 0.5);
+    ctx.rotate(model.roll);
+    const ry = d * 0.56 + 0.5;
+    const cg = ctx.createRadialGradient(0, 0, 0, 0, 0, Math.max(rx, ry));
+    cg.addColorStop(0, "#12040a"); cg.addColorStop(1, "#3a1416");
+    ctx.fillStyle = cg;
+    ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
+    if (d > 2) {
+      ctx.fillStyle = "rgba(236,230,220,.82)";
+      ctx.beginPath(); ctx.ellipse(0, -ry + Math.min(d * 0.14, model.mouthW * 0.05), rx * 0.72, Math.min(d * 0.16, model.mouthW * 0.06), 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(160,60,70,.75)";
+      ctx.beginPath(); ctx.ellipse(0, ry * 0.55, rx * 0.5, ry * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+    ctx.drawImage(jaw.canvas, jaw.x0 + dx * d, jaw.y0 + dy * d);
+  }
+
+  // blinking
+  if (now > blinkAt) { blinkStart = now; blinkAt = now + 2200 + Math.random() * 4200; }
+  const bt = (now - blinkStart) / 150;
+  const b = bt >= 0 && bt <= 2 ? (bt < 1 ? bt : 2 - bt) : 0;
+  if (b > 0.02) model.eyes.forEach((e, i) => eyelid(e, b, skin[i]));
+}
+
+function eyelid([ex, ey], b, colour) {
+  const rx = model.eyeRX, ry = model.eyeRY;
+  ctx.save();
+  ctx.translate(ex, ey); ctx.rotate(model.roll);
+  ctx.beginPath(); ctx.ellipse(0, 0, rx * 1.12, ry * 1.35, 0, 0, Math.PI * 2); ctx.clip();
+  ctx.shadowColor = colour; ctx.shadowBlur = ry * 0.8;
+  ctx.fillStyle = colour;
+  const h = ry * 2.7 * b;
+  ctx.fillRect(-rx * 1.3, -ry * 1.35, rx * 2.6, h);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(40,25,20,.55)"; ctx.lineWidth = Math.max(1, ry * 0.18);
+  ctx.beginPath(); ctx.ellipse(0, -ry * 1.35 + h - ry * 0.1, rx * 0.95, ry * 0.25, 0, 0.15, Math.PI - 0.15); ctx.stroke();
+  ctx.restore();
+}
+
+
+
+/* ---------------- a small newos brain ---------------- */
+const Brain = (() => {
+  const blank = () => ({ facts: [], rules: [], replies: {
+      "hello": "Hello{name}! What shall we talk about?", "hi": "Hi{name}!", "hey": "Hey{name}!",
+      "how are you": "I'm well, thank you. I'm learning all the time. How are you?",
+      "thanks": "You're welcome.", "thank you": "You're welcome.", "bye": "Goodbye{name}!", "goodbye": "Goodbye{name}!" },
+    words: {}, name: null, display: {} });
+  let mem = blank(), pending = null, last = null, lastEntity = null;
+  try { const saved = JSON.parse(localStorage.getItem("retromr_claude_brain") || "null"); if (saved && saved.facts) mem = Object.assign(blank(), saved); } catch (e) {}
+  const save = () => { try { localStorage.setItem("retromr_claude_brain", JSON.stringify(mem)); } catch (e) {} };
+
+  const FUNC = new Set("a an the is are am not and or if then of to in on at it he she they this that i you my your me".split(" "));
+  const IRREG = { men: "man", women: "woman", people: "person", children: "child", mice: "mouse", feet: "foot", teeth: "tooth", geese: "goose", fish: "fish", sheep: "sheep" };
+  const IRREG_PL = Object.fromEntries(Object.entries(IRREG).map(([p, s]) => [s, p]));
+  const singular = (w) => IRREG[w] || (/ies$/.test(w) && w.length > 4 ? w.slice(0, -3) + "y" : /(ches|shes|xes|sses|zes)$/.test(w) ? w.slice(0, -2) : /(ss|us|is|ous)$/.test(w) ? w : /s$/.test(w) && w.length > 2 ? w.slice(0, -1) : w);
+  const plural = (w) => IRREG_PL[w] || (/[^aeiou]y$/.test(w) ? w.slice(0, -1) + "ies" : /(s|x|z|ch|sh)$/.test(w) ? w + "es" : w + "s");
+  const art = (w) => (/^[aeiou]/.test(w) ? "an " : "a ") + w;
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const nameOf = (e) => e === "user" ? "you" : e === "bot" ? "I" : (mem.display[e] || (mem.theWords && mem.theWords[e] ? "the " + e : e));
+  const be = (e) => e === "user" ? "are" : e === "bot" ? "am" : "is";
+
+  function norm(text) {
+    return text.replace(/[’‘]/g, "'").replace(/\b(\w+)n't\b/gi, (m, b) => b.toLowerCase() === "can" ? "can not" : b.toLowerCase() === "won" ? "will not" : b + " not")
+      .replace(/\b(what|who|it|that|there|he|she|where|how)'s\b/gi, "$1 is").replace(/\bi'm\b/gi, "i am").replace(/'re\b/gi, " are")
+      .replace(/'s\b/gi, "").trim();
+  }
+  function words(s) { return s.toLowerCase().replace(/[.!?,;:"]+/g, " ").trim().split(/\s+/).filter(Boolean); }
+  function rememberNames(raw) {
+    raw.split(/\s+/).forEach((w, i) => { const c = w.replace(/[^\w'-]/g, ""); if (/^[A-Z]/.test(c) && !FUNC.has(c.toLowerCase()) && (i > 0 || !["The", "All", "Every", "Is", "What", "Who"].includes(c))) mem.display[c.toLowerCase()] = c; });
+  }
+  function entity(ws) {
+    if (!ws.length) return null;
+    if (ws.length === 1 && ["i", "me"].includes(ws[0])) return "user";
+    if (ws.length === 1 && ws[0] === "you") return "bot";
+    if (ws.length === 1 && ["it", "he", "she", "they", "him", "her"].includes(ws[0])) return lastEntity || ws[0];
+    if (ws[0] === "the") { mem.theWords = mem.theWords || {}; mem.theWords[ws.slice(1).join(" ")] = 1; return ws.slice(1).join(" "); }
+    if (ws[0] === "my") return "your " + ws.slice(1).join(" ");
+    return ws.join(" ");
+  }
+  const pred = (ws) => { const a = ws[0] === "a" || ws[0] === "an"; const p = (a ? ws.slice(1) : ws).join(" "); if (a) { mem.nouns = mem.nouns || {}; mem.nouns[p] = 1; } return p; };
+  const predText = (p) => (mem.nouns && mem.nouns[p] ? art(p) : p);
+
+  // Is entity e p?  -> {v: true|false|null, why}
+  function prove(e, p, depth = 6, seen = new Set()) {
+    const f = mem.facts.find((x) => x.s === e && x.p === p);
+    if (f) return { v: !f.neg, why: (e === "user" ? "you told me you " : "you told me that " + nameOf(e) + " ") + (f.neg ? be(e) + " not " : be(e) + " ") + predText(p) };
+    if (depth <= 0) return { v: null };
+    for (const r of mem.rules) {
+      if (r.p !== p || seen.has(r.c)) continue;
+      const sub = prove(e, r.c, depth - 1, new Set([...seen, r.c]));
+      if (sub.v === true) return { v: !r.neg, why: sub.why + ", and " + (r.neg ? "no " : "all ") + plural(r.c) + " are " + (mem.nouns && mem.nouns[p] ? plural(p) : p) };
+    }
+    return { v: null };
+  }
+  function describe(e) {
+    const preds = new Set([...mem.facts.map((f) => f.p), ...mem.rules.map((r) => r.p)]);
+    const yes = [...preds].filter((p) => prove(e, p).v === true).map(predText);
+    const no = mem.facts.filter((f) => f.s === e && f.neg).map((f) => predText(f.p));
+    const parts = [];
+    if (yes.length) parts.push(cap(nameOf(e)) + " " + be(e) + " " + list(yes));
+    if (no.length) parts.push(cap(nameOf(e)) + " " + be(e) + " not " + list(no));
+    if (mem.words[e]) parts.push("\"" + e + "\" means " + mem.words[e]);
+    return parts.length ? parts.join(". ") + "." : "I don't know anything about " + nameOf(e) + " yet. Tell me something!";
+  }
+  const list = (xs) => xs.length < 2 ? xs.join("") : xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1];
+  function prop(ws) {          // "the moon is cheese" | "2+2=4"
+    const s = ws.join(" ");
+    if (/^[\d\s+\-*/().]+(=|is|equals)[\d\s+\-*/().]+$/.test(s)) { const [a, b] = s.split(/=|is|equals/); return { math: true, a: a.trim(), b: b.trim() }; }
+    const i = ws.findIndex((w) => w === "is" || w === "are" || w === "am");
+    if (i < 1) return null;
+    const neg = ws[i + 1] === "not";
+    return { s: entity(ws.slice(0, i)), p: pred(ws.slice(i + (neg ? 2 : 1))), neg };
+  }
+  const calc = (e) => { if (!/^[\d\s+\-*/().]+$/.test(e)) return NaN; try { return Function('"use strict";return (' + e + ")")(); } catch (x) { return NaN; } };
+  const truthOf = (q) => q.math ? (calc(q.a) === calc(q.b)) : (() => { const r = prove(q.s, q.p).v; return q.neg ? r === false : r === true; })();
+  const say = (q) => q.math ? q.a + " = " + q.b : nameOf(q.s) + " " + be(q.s) + (q.neg ? " not " : " ") + predText(q.p);
+  const content = (q) => q.math ? [q.a, q.b].join(" ").match(/\d+/g) || [] : [...q.s.split(" "), ...q.p.split(" ")].filter((w) => !FUNC.has(w));
+
+  function reply(raw0) {
+    const raw = norm(raw0), ws = words(raw), key = ws.join(" ");
+    if (!ws.length) return "Say something and I'll do my best.";
+    if (pending && pending.type === "teach") {
+      const k = pending.key; pending = null;
+      if (!["skip", "never mind", "nothing", "cancel"].includes(key)) {
+        mem.replies[k] = raw0.replace(/^say\s+/i, "").trim(); save();
+        return "Got it. When you say \"" + k + "\", I'll say \"" + mem.replies[k] + "\".";
+      }
+      return "OK, never mind.";
+    }
+    rememberNames(raw);
+    let m;
+    if ((m = key.match(/^(?:my name is|call me|i am called) (\w+)/))) { mem.name = m[1]; save(); return "Nice to meet you, " + nameOf(m[1]) + "."; }
+    if (/^(what is my name|who am i)$/.test(key)) return mem.name ? "Your name is " + nameOf(mem.name) + "." : "You haven't told me your name yet.";
+    if (/^(who are you|what are you|what is your name)$/.test(key)) return "I'm retromr, your talking photo. I learn whatever you teach me.";
+    if ((m = raw.match(/^(?:when|if) i say (.+?),? (?:you )?(?:should )?(?:say|reply|answer) (.+)$/i))) {
+      const k = words(m[1]).join(" "); mem.replies[k] = m[2].replace(/^["']|["']$/g, ""); save();
+      return "Got it. When you say \"" + k + "\", I'll say \"" + mem.replies[k] + "\".";
+    }
+    if ((m = key.match(/^(\w+) means (.+)$/)) || (m = key.match(/^define (\w+) as (.+)$/))) { mem.words[m[1]] = m[2]; save(); return "Thanks. Now I know that " + m[1] + " means " + m[2] + "."; }
+    if ((m = key.match(/^what does (\w+) mean$/))) return mem.words[m[1]] ? "\"" + m[1] + "\" means " + mem.words[m[1]] + "." : "I don't know what " + m[1] + " means yet. Tell me: " + m[1] + " means...";
+    if ((m = raw.toLowerCase().match(/^(?:what is|what's|calculate)\s+([\d\s+\-*/().]+)\??$/))) { const v = calc(m[1]); return isNaN(v) ? "I can't work that out." : m[1].trim() + " is " + v + "."; }
+    if (key === "why") return last ? "Because " + last + "." : "Ask me something first, then ask why.";
+    if (key === "forget everything") { mem = blank(); save(); return "I've forgotten everything and started fresh."; }
+    if ((m = raw.match(/^(compare )?if (.+?),? then (.+?)\??$/i))) {
+      const a = prop(words(m[2])), b = prop(words(m[3]));
+      if (a && b) {
+        const ta = truthOf(a), tb = truthOf(b), shared = content(a).filter((w) => content(b).includes(w));
+        const mat = !ta || tb;
+        let r = "As a material conditional, \"if " + say(a) + " then " + say(b) + "\" is " + mat + ".";
+        if (mat && !ta) r += " But only because \"" + say(a) + "\" is false, a paradox of material implication.";
+        r += shared.length ? " In relevance logic the two share content (" + shared.join(", ") + ")." : " In relevance logic it fails: the two parts share no content.";
+        return r;
+      }
+    }
+    const generic = key.match(/^(\w+) are (not )?(.+)$/);
+    if (generic && singular(generic[1]) !== generic[1] && !FUNC.has(generic[1]) && !mem.facts.some((f) => f.s === generic[1])) m = generic;
+    else m = null;
+    if (m || (m = key.match(/^(?:all|every|each) (\w+) (?:is|are) (not )?(.+)$/)) || (m = key.match(/^no (\w+) (?:is|are) ()(.+)$/))) {
+      const c = singular(m[1]); let p = pred(m[3].split(" "));
+      if (!mem.nouns || !mem.nouns[p]) { const sp = singular(p); if (sp !== p && !p.includes(" ")) { p = sp; mem.nouns = mem.nouns || {}; mem.nouns[p] = 1; } }
+      mem.rules.push({ c, p, neg: !!m[2] || key.startsWith("no ") }); save();
+      const so = [...new Set(mem.facts.map((f) => f.s))].filter((e) => prove(e, c).v === true);
+      return "Got it: " + (key.startsWith("no ") || m[2] ? "no " : "all ") + plural(c) + " are " + (mem.nouns[p] ? plural(p) : p) + "." +
+        (so.length && !m[2] ? " So " + list(so.map((e) => nameOf(e) + " " + be(e) + " " + predText(p))) + ", too." : "");
+    }
+    if ((m = key.match(/^(?:is|are|am) (.+)$/))) {
+      const w2 = m[1].split(" ");
+      const n = w2[0] === "the" || w2[0] === "my" ? 2 : 1;
+      const e = entity(w2.slice(0, n)), neg = w2[n] === "not", p = pred(w2.slice(n + (neg ? 1 : 0)));
+      if (e && p) {
+        lastEntity = e === "user" || e === "bot" ? lastEntity : e;
+        const r = prove(e, p);
+        last = r.why || null;
+        if (r.v === null) return "I don't know whether " + nameOf(e) + " " + be(e) + " " + predText(p) + ". Tell me and I'll remember.";
+        const yes = neg ? !r.v : r.v;
+        return (yes ? "Yes. " : "No. ") + cap(nameOf(e)) + " " + be(e) + (r.v ? " " : " not ") + predText(p) + ".";
+      }
+    }
+    if ((m = key.match(/^(?:who|what) (?:is|are) (.+)$/)) || (m = key.match(/^(?:what do you know about|tell me about) (.+)$/))) {
+      const w2 = m[1].split(" "), e = entity(w2);
+      const known = mem.facts.some((f) => f.s === e) || e === "user" || e === "bot";
+      if (known) { lastEntity = e; return describe(e); }
+      const p = pred(w2);
+      const who = [...new Set(mem.facts.map((f) => f.s))].filter((x) => prove(x, p).v === true);
+      if (who.length) return cap(list(who.map(nameOf))) + (who.length > 1 ? " are " : " " + be(who[0]) + " ") + predText(p) + ".";
+      if (mem.words[e]) return "\"" + e + "\" means " + mem.words[e] + ".";
+    }
+    if (mem.replies[key]) return mem.replies[key].replace("{name}", mem.name ? ", " + nameOf(mem.name) : "");
+    if (/ (is|are|am) /.test(" " + key + " ") && !/^(what|who|why|how|where|when)\b/.test(key)) {
+      const q = prop(ws);
+      if (q && q.math) return calc(q.a) === calc(q.b) ? "That's right." : "Actually, " + q.a + " is " + calc(q.a) + ".";
+      if (q && q.s && q.p) {
+        const before = prove(q.s, q.p).v;
+        mem.facts = mem.facts.filter((f) => !(f.s === q.s && f.p === q.p));
+        mem.facts.push({ s: q.s, p: q.p, neg: q.neg }); save();
+        if (q.s !== "user" && q.s !== "bot") lastEntity = q.s;
+        const follows = mem.rules.filter((r) => r.c === q.p && !q.neg).map((r) => nameOf(q.s) + " " + be(q.s) + (r.neg ? " not " : " ") + predText(r.p));
+        return (before !== null && before === q.neg ? "Oh, I thought otherwise. I've updated that: " : "I'll remember that: ") + say(q) + "." + (follows.length ? " That means " + list(follows) + "." : "");
+      }
+    }
+    // closest learned reply
+    const kw = new Set(ws);
+    let best = null, score = 0;
+    for (const [k, v] of Object.entries(mem.replies)) {
+      const kk = new Set(k.split(" ")), inter = [...kk].filter((x) => kw.has(x)).length;
+      const s = inter / new Set([...kk, ...kw]).size;
+      if (s > score) { score = s; best = v; }
+    }
+    if (best && score >= 0.5) return best.replace("{name}", mem.name ? ", " + nameOf(mem.name) : "");
+    pending = { type: "teach", key };
+    return "I'm not sure how to answer that yet. What should I say when you say that?";
+  }
+  return { reply };
+})();
+
+/* ---------------- talking ---------------- */
+let speechOK = true;
+function caption(text) {
+  if (speechOK) return;               // only when this browser won't speak
+  $("caption").textContent = text; show("caption", true);
+  clearTimeout(caption.t); caption.t = setTimeout(() => show("caption", false), 2500 + text.length * 60);
+}
+async function talk(text) {
+  if (mode !== "talk") return;
+  const ok = await NewosVoice.speak(text, { onMouth: (v) => { open = v; } });
+  open = 0;
+  if (ok === false) { speechOK = false; caption(text); }
+}
+function unlockSpeech() {
+  try { if (window.speechSynthesis) speechSynthesis.speak(new SpeechSynthesisUtterance("")); } catch (e) {}
+}
+$("bar").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const t = $("typed").value.trim();
+  if (!t) return;
+  $("typed").value = "";
+  unlockSpeech();
+  hearing = true; setTimeout(() => { hearing = false; }, 600);
+  setTimeout(() => talk(Brain.reply(t)), 350);
+});
+$("typed").addEventListener("input", () => { hearing = !!$("typed").value; });
+
+/* ---------------- modes ---------------- */
+function enterTalk() {
+  mode = "talk";
+  show("drop", false); show("close", true); show("adjust", true); show("done", false); show("bar", true);
+  ["m0", "m1", "m2"].forEach((m) => show(m, false));
+  setTimeout(() => $("typed").focus(), 50);
+}
+function enterUpload() {
+  mode = "upload";
+  NewosVoice.cancel(); open = 0; img = null; model = null; lm = null;
+  ["close", "adjust", "done", "bar", "caption", "m0", "m1", "m2"].forEach((id) => show(id, false));
+  show("drop", true);
+}
+$("close").onclick = () => { enterUpload(); try { localStorage.removeItem("retromr_claude_face"); } catch (e) {} };
+
+$("pick").onclick = () => { unlockSpeech(); $("file").click(); };
+$("file").onchange = (e) => { const f = e.target.files[0]; if (f) useFile(f); e.target.value = ""; };
+["dragenter", "dragover"].forEach((ev) => $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.remove("over"); }));
+$("drop").addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f && f.type.startsWith("image/")) { unlockSpeech(); useFile(f); } });
+
+async function useFile(file) {
+  const dataUrl = await shrink(file);
+  img = await loadImage(dataUrl); IW = img.naturalWidth; IH = img.naturalHeight;
+  const L = await findFace(img);
+  await setFace(L, null);
+  try { localStorage.setItem("retromr_claude_face", JSON.stringify({ image: dataUrl, landmarks: L })); } catch (e) {}
+  if (L.source === "facedetector") { enterTalk(); talk(Brain.reply("hello")); }
+  else startAdjust();               // a guess: let the eyes and mouth be placed
+}
+
+/* ---------------- adjusting the eyes and mouth ---------------- */
+const marks = ["m0", "m1", "m2"], keys = ["eyeL", "eyeR", "mouth"];
+const toScreen = ([x, y]) => [fit.ox + x * fit.s, fit.oy + y * fit.s];
+const toImage = ([x, y]) => [(x - fit.ox) / fit.s, (y - fit.oy) / fit.s];
+function placeMarks() {
+  if (!lm) return;
+  marks.forEach((id, i) => { const [x, y] = toScreen(lm[keys[i]]); $(id).style.left = x + "px"; $(id).style.top = y + "px"; });
+}
+function startAdjust() {
+  if (!model) return;
+  mode = "adjust";
+  show("drop", false); show("close", true); show("bar", false); show("adjust", false); show("done", true);
+  marks.forEach((m) => show(m, true));
+  placeMarks();
+}
+marks.forEach((id, i) => {
+  const el = $(id);
+  el.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); el.setPointerCapture(e.pointerId);
+    const move = (ev) => { el.style.left = ev.clientX + "px"; el.style.top = ev.clientY + "px"; lm[keys[i]] = toImage([ev.clientX, ev.clientY]); };
+    const up = () => { el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); };
+    el.addEventListener("pointermove", move); el.addEventListener("pointerup", up);
+  });
+});
+$("adjust").onclick = () => startAdjust();
+$("done").onclick = async () => {
+  unlockSpeech();
+  if (lm.eyeL[0] > lm.eyeR[0]) [lm.eyeL, lm.eyeR] = [lm.eyeR, lm.eyeL];
+  delete lm.chin;
+  lm.mouthW = 0.9 * dist(lm.eyeL, lm.eyeR);
+  await setFace(lm, null);
+  try { localStorage.setItem("retromr_claude_face", JSON.stringify({ image: img.src, landmarks: lm })); } catch (e) {}
+  const first = mode === "adjust" && !$("bar").dataset.greeted;
+  enterTalk();
+  if (first) { $("bar").dataset.greeted = "1"; talk(Brain.reply("hello")); }
+};
+
+/* ---------------- start ---------------- */
+(async function boot() {
+  resize();
+  requestAnimationFrame(frame);
+  try {
+    const saved = JSON.parse(localStorage.getItem("retromr_claude_face") || "null");
+    if (saved && saved.image) {
+      img = await loadImage(saved.image); IW = img.naturalWidth; IH = img.naturalHeight;
+      await setFace(saved.landmarks, null);
+      enterTalk();
+      return;
+    }
+  } catch (e) {}
+  enterUpload();
+})();
+</script>
+</body>
+</html>
