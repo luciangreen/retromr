@@ -146,7 +146,8 @@ const NewosVoice = (() => {
 /* ---------------- layout ---------------- */
 function resize() {
   dpr = window.devicePixelRatio || 1;
-  W = window.innerWidth; H = window.innerHeight;
+  W = window.innerWidth || document.documentElement.clientWidth || canvas.clientWidth;
+  H = window.innerHeight || document.documentElement.clientHeight || canvas.clientHeight;
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
   if (model) layout();
 }
@@ -297,6 +298,9 @@ async function setFace(landmarks, serverModel) {
 /* ---------------- drawing ---------------- */
 function frame(now) {
   requestAnimationFrame(frame);
+  // embedded frames can start at 0x0 and resize without telling us
+  const cw = window.innerWidth || document.documentElement.clientWidth;
+  if (cw !== W || (window.innerHeight || document.documentElement.clientHeight) !== H || !canvas.width) resize();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = "#0b0b10"; ctx.fillRect(0, 0, W, H);
   if (!img || !model || mode === "upload") return;
@@ -586,6 +590,7 @@ $("file").onchange = (e) => { const f = e.target.files[0]; if (f) useFile(f); e.
 $("drop").addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f && f.type.startsWith("image/")) { unlockSpeech(); useFile(f); } });
 
 async function useFile(file) {
+  resize();
   const dataUrl = await shrink(file);
   img = await loadImage(dataUrl); IW = img.naturalWidth; IH = img.naturalHeight;
   const L = await findFace(img);
