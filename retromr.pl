@@ -39,7 +39,7 @@ user:file_search_path(retromr_web, Dir) :-
     directory_file_path(App, web, Dir).
 
 :- http_handler(root(.),              http_reply_file(retromr_web('index.html'), []), []).
-:- http_handler(root(static),         serve_files_in_directory(retromr_web), [prefix]).
+:- http_handler(root(static), serve_static, [prefix]).
 :- http_handler(root(newos/'tts.js'), serve_tts, []).
 :- http_handler(root(api/face),       api_face, [methods([get, post])]).
 :- http_handler(root(api/face/clear), api_face_clear, [method(post)]).
@@ -169,5 +169,16 @@ api_chat(Request) :-
     (   get_dict(text, In, T0) -> atom_string(T0, Text) ; Text = "" ),
     newos_chat(Text, Reply, Speak),
     reply_json_dict(_{reply:Reply, speak:Speak}).
+
+serve_static(Request) :-
+    (   memberchk(path_info(P0), Request) -> true ; P0 = '' ),
+    (   atom_concat('/', P, P0) -> true ; P = P0 ),
+    \+ sub_atom(P, _, _, _, '..'),
+    app_dir(A),
+    atomic_list_concat([A, '/web/', P], F),
+    exists_file(F), !,
+    http_reply_file(F, [unsafe(true)], Request).
+serve_static(Request) :-
+    http_404([], Request).
 
 :- initialization(server).
