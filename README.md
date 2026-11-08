@@ -48,3 +48,7 @@ swipl -g run_tests -t halt tests/test_retromr.pl
 ```
 
 These cover the face model and the spec's paint examples. Two spec examples look like slips, and the tests use the intended result instead: the "left" move grid is garbled, and the vertical "draw line" expects a blank screen.
+
+## Inputs and outputs
+
+`io/ios.txt` lists 200 inputs and the outputs they give, from real runs of this repo's predicates (which predicates, and how the inputs are made, is in `io/cases.pl`; the inputs are made the same way every time). `swipl io/check_ios.pl` runs them again and fails if any output changed; the "Inputs and outputs" workflow does the same on every push. If a change is meant, run `swipl io/make_ios.pl` and check the diff.
